@@ -6,7 +6,11 @@ from sklearn.impute import KNNImputer
 from datetime import datetime, date
 from statsmodels.tsa.arima.model import ARIMA
 from prophet import Prophet
+from tensorflow.keras.models import load_model
 
+"""""
+
+"""""
 
 def upload_file():
     # Create a root window and hide it
@@ -304,8 +308,19 @@ def prophet_time_series(train,test2020,test2021,test2022,time_series_index):
 
     return results
 
+def data_for_lstm(data_train_long):
+    dataset = data_train_long.Value.values
+    dataset = dataset.astype('float32')
+    dataset = dataset.reshape(-1,1)
+    return dataset
 
-
+def create_dataset(dataset, look_back=1):
+	dataX, dataY = [], []
+	for i in range(len(dataset)-look_back-1):
+		a = dataset[i:(i+look_back), 0]
+		dataX.append(a)
+		dataY.append(dataset[i + look_back, 0])
+	return np.array(dataX), np.array(dataY)
 
 
 def merge_columns(df1,df2):
@@ -313,6 +328,23 @@ def merge_columns(df1,df2):
     df2 = df2.reset_index (drop = True)
     output_db = pd.merge(df1, df2, left_index=True, right_index=True)  
     return output_db
+
+def lstm_predict(x_2020,x_2021,x_2022):
+    model = load_model('LSTM.h5')
+    predictions2020 = model.predict(x_2020)
+    mape2020 = calculate_mape(x_2020.flatten(), predictions2020.flatten())
+    predictions2021 = model.predict(x_2021)
+    mape2021 = calculate_mape(x_2021.flatten(), predictions2021.flatten())
+    predictions2022 = model.predict(x_2022)
+    mape2022 = calculate_mape(x_2022.flatten(), predictions2022.flatten())
+
+    lstm_predictions_df = pd.DataFrame({'LSTM_Prediction_2020': predictions2020.flatten(),'LSTM_Prediction_2021': predictions2021.flatten(), 
+                                     'LSTM_Prediction_2022': predictions2022.flatten()})
+    lstm_Mape_df = pd.DataFrame({'LSTM_MAPE_2020': mape2020,'LSTM_MAPE_2021': mape2021, 
+                                     'LSTM_MAPE_2022': mape2022}, index =[0])
+    return lstm_predictions_df, lstm_Mape_df
+    
+    
 
 
 file_path = upload_file()
@@ -363,3 +395,26 @@ results = prophet_time_series(data_train_long, data_2020_test_long,data_2021_tes
 
 output_db = merge_columns(output_db, results)
 
+data_2020_test_longlstim= data_for_lstm(data_2020_test_long)
+data_2021_test_longlstim= data_for_lstm(data_2021_test_long)
+data_2022_test_longlstim= data_for_lstm(data_2022_test_long)
+
+x_2020, y_2020 = create_dataset(data_2020_test_longlstim, look_back=1)
+x_2021, y_2021 = create_dataset(data_2021_test_longlstim, look_back=1)
+x_2022, y_2022 = create_dataset(data_2022_test_longlstim, look_back=1)
+
+x_2020 = np.reshape(x_2020, (x_2020.shape[0], 1, x_2020.shape[1]))
+x_2021 = np.reshape(x_2021, (x_2021.shape[0], 1, x_2021.shape[1]))
+x_2022= np.reshape(x_2022, (x_2022.shape[0], 1, x_2022.shape[1]))
+
+lstm_predictions_df, lstm_Mape_df = lstm_predict(x_2020,x_2021,x_2022)
+print(lstm_predictions_df)
+print(lstm_Mape_df)
+
+output_db = merge_columns(output_db, lstm_predictions_df )
+
+output_db['LSTM_MAPE_2020'] = abs((output_db['2020'] - output_db['LSTM_Prediction_2020']) / output_db['2020']) * 100
+output_db['LSTM_MAPE_2021'] = abs((output_db['2021'] - output_db['LSTM_Prediction_2021']) / output_db['2021']) * 100
+output_db['LSTM_MAPE_2022'] = abs((output_db['2022'] - output_db['LSTM_Prediction_2022']) / output_db['2022']) * 100
+
+output_db.to_excel('FINAL FILE.xlsx', index=False)
