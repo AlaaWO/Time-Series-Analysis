@@ -3,6 +3,10 @@ import numpy as np
 import tkinter as tk
 from tkinter import filedialog
 from sklearn.impute import KNNImputer
+from datetime import datetime, date
+from statsmodels.tsa.arima.model import ARIMA
+from prophet import Prophet
+
 
 def upload_file():
     # Create a root window and hide it
@@ -117,7 +121,7 @@ def impute_data(data, number_of_id_rows):
 def column_question(data):
     column_names = data.columns.tolist()
     print("Column names:", column_names)
-    column_name = input("Please specify the name of the column: ")  # Prompt user to input column name
+    column_name = input("Please specify the name of the column where the time series starts: ")  # Prompt user to input column name
 
     # Check if the specified column name exists
     if column_name not in column_names:
@@ -167,6 +171,101 @@ def split_test_columns(data):
 
     return data_train,data_2020_test, data_2021_test, data_2022_test
 # Split the sliced data into test columns
+def concat_with_X(X_data, data):
+    full_set = pd.concat([X_data, data], axis=1)
+    return full_set
+
+def long_f(data,number_of_id_rows):
+    
+    id_vars = list(data.columns)[:number_of_id_rows]
+    value_vars = list(data.columns)[number_of_id_rows:]
+
+    data = pd.melt(data, id_vars=id_vars, value_vars=value_vars, var_name='Year', value_name='Value')
+    return (data)
+
+def mean_absolute_percentage_error(y_true, y_pred): 
+    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+# Function to calculate MAPE
+
+def process_format(format,time_series_index):
+    format['Year'] = pd.to_datetime(format.Year, format = '%Y')
+    format['Value'] = pd.to_numeric(format.Value)
+    format= format.iloc[:,time_series_index:]
+    return format
+
+def process_format_for_ARIMA(format,time_series_index):
+    
+    format = process_format(format,time_series_index)
+    format.index = pd.DatetimeIndex(format.index).to_period('Y')
+    format=format.set_index('Year')
+    return format
+
+def ARIMA__train(train,test2020,test2021,test2022,time_series_index):
+    ##train
+    train = process_format_for_ARIMA(train,time_series_index)
+    mape_scores = []
+
+    model = ARIMA(train['Value'], order=(5, 1, 0))  # Example order for ARIMA
+    fitted_model = model.fit()
+    ##test2020
+    test2020=process_format_for_ARIMA(test2020,time_series_index)
+    predictions2020 = fitted_model.forecast(steps=len(test2020))
+    print(predictions2020)
+
+    model = ARIMA(test2020['Value'], order=(5, 1, 0))  # Example order for ARIMA
+    fitted_model = model.fit()
+
+    mape_scores.append(mean_absolute_percentage_error(test2020, predictions2020))
+    print(mape_scores)
+
+    #test 2021
+    test2021=process_format_for_ARIMA(test2021,time_series_index)
+    predictions2021 = fitted_model.forecast(steps=len(test2021))
+    print(predictions2021)
+
+    model = ARIMA(test2021['Value'], order=(5, 1, 0))  # Example order for ARIMA
+    fitted_model = model.fit()
+
+    mape_scores.append( mean_absolute_percentage_error(test2021, predictions2021))
+    print(mape_scores)
+
+    model = ARIMA(test2022['Value'], order=(5, 1, 0))  # Example order for ARIMA
+    fitted_model = model.fit()
+    #test 2022
+    test2022=process_format_for_ARIMA(test2022,time_series_index)
+    predictions2022 = fitted_model.forecast(steps=len(test2022))
+    print(predictions2022)
+
+    mape_scores.append(mean_absolute_percentage_error(test2022, predictions2022))
+    print(mape_scores)
+
+    predictions2020 = predictions2020.reset_index(drop=True)
+    predictions2021 = predictions2021.reset_index(drop=True)
+    predictions2022 = predictions2022.reset_index(drop=True)
+
+
+
+    Arima_predictions_df = pd.DataFrame({'ARIMA_Prediction_2020': predictions2020,'ARIMA_Prediction_2021': predictions2021, 
+                                     'ARIMA_Prediction_2022': predictions2022})
+
+    return Arima_predictions_df, mape_scores
+
+def process_format_for_prophet(format,time_series_index):
+    format = process_format(format,time_series_index)
+    format = format.reset_index(drop= True).rename(columns={'Year': 'ds', 'Value': 'y'})
+    return format
+
+def prophet_time_series():
+    with open('serialized_model.json', 'r') as fin:
+    m = model_from_json(fin.read())  # Load model
+
+def merge_columns(df1,df2):
+    df1 = df1.reset_index(drop=True)
+    df2 = df2.reset_index (drop = True)
+    output_db = pd.merge(df1, df2, left_index=True, right_index=True)  
+    return output_db
+
 
 file_path = upload_file()
 print(type(file_path))
@@ -185,5 +284,30 @@ find_nan(file_path)
 X_data,Y_data = slice_data(file_path,time_series_index)
 data_train,data_2020_test, data_2021_test, data_2022_test = split_test_columns(Y_data)
 
+## make train long format
+data_train = concat_with_X(X_data, data_train)
+data_train_long = long_f(data_train,time_series_index)
+print(data_train_long)
 
+## make test long format
+data_2020_test = concat_with_X(X_data, data_2020_test)
+data_2020_test_long = long_f(data_2020_test,time_series_index)
+print(data_2020_test_long)
+
+data_2021_test = concat_with_X(X_data, data_2021_test)
+data_2021_test_long = long_f(data_2021_test,time_series_index)
+print(data_2021_test_long)
+
+data_2022_test = concat_with_X(X_data, data_2022_test)
+data_2022_test_long = long_f(data_2022_test,time_series_index)
+
+
+Arima_predictions_db, mape_scores = ARIMA__train(data_train_long,data_2020_test_long,data_2021_test_long,data_2022_test_long,time_series_index)
+print(Arima_predictions_db)
+output_db = merge_columns(file_path,Arima_predictions_db)
+print(output_db)
+# Calculate MAPE for each year and add them as new columns
+output_db['ARIMA_MAPE_2020'] = abs((output_db['2020'] - output_db['ARIMA_Prediction_2020']) / output_db['2020']) * 100
+output_db['ARIMA_MAPE_2021'] = abs((output_db['2021'] - output_db['ARIMA_Prediction_2021']) / output_db['2021']) * 100
+output_db['ARIMA_MAPE_2022'] = abs((output_db['2022'] - output_db['ARIMA_Prediction_2022']) / output_db['2022']) * 100
 
