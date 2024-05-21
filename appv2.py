@@ -204,7 +204,6 @@ def process_format_for_ARIMA(format,time_series_index):
 def ARIMA__train(train,test2020,test2021,test2022,time_series_index):
     ##train
     train = process_format_for_ARIMA(train,time_series_index)
-    mape_scores = []
 
     model = ARIMA(train['Value'], order=(5, 1, 0))  # Example order for ARIMA
     fitted_model = model.fit()
@@ -216,8 +215,6 @@ def ARIMA__train(train,test2020,test2021,test2022,time_series_index):
     model = ARIMA(test2020['Value'], order=(5, 1, 0))  # Example order for ARIMA
     fitted_model = model.fit()
 
-    mape_scores.append(mean_absolute_percentage_error(test2020, predictions2020))
-    print(mape_scores)
 
     #test 2021
     test2021=process_format_for_ARIMA(test2021,time_series_index)
@@ -227,8 +224,7 @@ def ARIMA__train(train,test2020,test2021,test2022,time_series_index):
     model = ARIMA(test2021['Value'], order=(5, 1, 0))  # Example order for ARIMA
     fitted_model = model.fit()
 
-    mape_scores.append( mean_absolute_percentage_error(test2021, predictions2021))
-    print(mape_scores)
+    
 
     model = ARIMA(test2022['Value'], order=(5, 1, 0))  # Example order for ARIMA
     fitted_model = model.fit()
@@ -237,8 +233,7 @@ def ARIMA__train(train,test2020,test2021,test2022,time_series_index):
     predictions2022 = fitted_model.forecast(steps=len(test2022))
     print(predictions2022)
 
-    mape_scores.append(mean_absolute_percentage_error(test2022, predictions2022))
-    print(mape_scores)
+    
 
     predictions2020 = predictions2020.reset_index(drop=True)
     predictions2021 = predictions2021.reset_index(drop=True)
@@ -249,16 +244,69 @@ def ARIMA__train(train,test2020,test2021,test2022,time_series_index):
     Arima_predictions_df = pd.DataFrame({'ARIMA_Prediction_2020': predictions2020,'ARIMA_Prediction_2021': predictions2021, 
                                      'ARIMA_Prediction_2022': predictions2022})
 
-    return Arima_predictions_df, mape_scores
+    return Arima_predictions_df
 
 def process_format_for_prophet(format,time_series_index):
     format = process_format(format,time_series_index)
     format = format.reset_index(drop= True).rename(columns={'Year': 'ds', 'Value': 'y'})
     return format
 
-def prophet_time_series():
-    with open('serialized_model.json', 'r') as fin:
-    m = model_from_json(fin.read())  # Load model
+def calculate_mape(actual, predicted):
+    return (abs((actual - predicted) / actual).mean()) * 100
+
+def prophet_time_series(train,test2020,test2021,test2022,time_series_index):
+    # Define a dictionary to hold the dataframes
+    results = pd.DataFrame()
+
+    df_2019 = process_format_for_prophet(train,time_series_index)
+    df_2020 = process_format_for_prophet(test2020,time_series_index)
+    df_2021= process_format_for_prophet(test2021,time_series_index)
+    df_2022= process_format_for_prophet(test2022,time_series_index)
+
+    periods_data = {
+    '2020': df_2020,
+    '2021': df_2021,
+    '2022': df_2022
+    }
+
+    # Train on the previous period and predict for the current period
+    for period, period_data in periods_data.items():
+        # Determine the training data based on the previous year
+        if period == '2020':
+            train_data = df_2019
+        elif period == '2021':
+            train_data = pd.concat([df_2019, df_2020])
+        elif period == '2022':
+            train_data = pd.concat([df_2019, df_2020, df_2021])
+        
+        # Initialize and fit the Prophet model
+        prophet_model = Prophet()
+        prophet_model.fit(train_data)
+        
+        # Generate future dates for the current period
+        future_df = period_data[['ds']].copy()
+        
+        # Predict using the fitted model
+        forecast = prophet_model.predict(future_df)
+        
+        # Calculate MAPE for the current period
+        actuals = period_data['y']
+        predictions = forecast['yhat']
+        mape = calculate_mape(actuals.values, predictions.values)
+        
+        # Add the predictions and MAPE to the results dataframe
+        results[f'Prophet_Prediction_{period}'] = forecast['yhat'].values
+        results[f'Prophet_MAPE_{period}'] = [mape] * len(forecast)  # Repeated MAPE value for each row
+
+
+    # Display the results
+    print(results)
+
+    return results
+
+
+
+
 
 def merge_columns(df1,df2):
     df1 = df1.reset_index(drop=True)
@@ -302,7 +350,7 @@ data_2022_test = concat_with_X(X_data, data_2022_test)
 data_2022_test_long = long_f(data_2022_test,time_series_index)
 
 
-Arima_predictions_db, mape_scores = ARIMA__train(data_train_long,data_2020_test_long,data_2021_test_long,data_2022_test_long,time_series_index)
+Arima_predictions_db = ARIMA__train(data_train_long,data_2020_test_long,data_2021_test_long,data_2022_test_long,time_series_index)
 print(Arima_predictions_db)
 output_db = merge_columns(file_path,Arima_predictions_db)
 print(output_db)
@@ -310,4 +358,8 @@ print(output_db)
 output_db['ARIMA_MAPE_2020'] = abs((output_db['2020'] - output_db['ARIMA_Prediction_2020']) / output_db['2020']) * 100
 output_db['ARIMA_MAPE_2021'] = abs((output_db['2021'] - output_db['ARIMA_Prediction_2021']) / output_db['2021']) * 100
 output_db['ARIMA_MAPE_2022'] = abs((output_db['2022'] - output_db['ARIMA_Prediction_2022']) / output_db['2022']) * 100
+
+results = prophet_time_series(data_train_long, data_2020_test_long,data_2021_test_long,data_2022_test_long,time_series_index)
+
+output_db = merge_columns(output_db, results)
 
